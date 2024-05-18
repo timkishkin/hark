@@ -126,7 +126,7 @@ for (var i = 0; i < 100; i++) {
   window.requestAnimationFrame(draw);
 })();
 
-},{"../hark.js":2,"attachmediastream":5,"bows":4,"getusermedia":3}],3:[function(require,module,exports){
+},{"../hark.js":2,"attachmediastream":5,"bows":3,"getusermedia":4}],4:[function(require,module,exports){
 // getUserMedia helper by @HenrikJoreteg
 var func = (navigator.getUserMedia ||
             navigator.webkitGetUserMedia ||
@@ -238,7 +238,8 @@ module.exports = function(stream, options) {
       threshold = options.threshold,
       play = options.play,
       history = options.history || 10,
-      running = true;
+      running = true,
+      webWorkerUrl = options.webWorkerUrl || null;
 
   // Ensure that just a single AudioContext is internally created
   audioContext = options.audioContext || audioContext || new audioContextType();
@@ -303,46 +304,57 @@ module.exports = function(stream, options) {
       harker.speakingHistory.push(0);
   }
 
+  function processFrame(){
+    //check if stop has been called
+    if(!running) {
+      return;
+    }
+
+    var currentVolume = getMaxVolume(analyser, fftBins);
+
+    harker.emit('volume_change', currentVolume, threshold);
+
+    var history = 0;
+    if (currentVolume > threshold && !harker.speaking) {
+      // trigger quickly, short history
+      for (var i = harker.speakingHistory.length - 3; i < harker.speakingHistory.length; i++) {
+        history += harker.speakingHistory[i];
+      }
+      if (history >= 2) {
+        harker.speaking = true;
+        harker.emit('speaking');
+      }
+    } else if (currentVolume < threshold && harker.speaking) {
+      for (var i = 0; i < harker.speakingHistory.length; i++) {
+        history += harker.speakingHistory[i];
+      }
+      if (history == 0) {
+        harker.speaking = false;
+        harker.emit('stopped_speaking');
+      }
+    }
+    harker.speakingHistory.shift();
+    harker.speakingHistory.push(0 + (currentVolume > threshold));
+  }
+
   // Poll the analyser node to determine if speaking
   // and emit events if changed
-  var looper = function() {
-    setTimeout(function() {
-
-      //check if stop has been called
-      if(!running) {
-        return;
-      }
-
-      var currentVolume = getMaxVolume(analyser, fftBins);
-
-      harker.emit('volume_change', currentVolume, threshold);
-
-      var history = 0;
-      if (currentVolume > threshold && !harker.speaking) {
-        // trigger quickly, short history
-        for (var i = harker.speakingHistory.length - 3; i < harker.speakingHistory.length; i++) {
-          history += harker.speakingHistory[i];
-        }
-        if (history >= 2) {
-          harker.speaking = true;
-          harker.emit('speaking');
-        }
-      } else if (currentVolume < threshold && harker.speaking) {
-        for (var i = 0; i < harker.speakingHistory.length; i++) {
-          history += harker.speakingHistory[i];
-        }
-        if (history == 0) {
-          harker.speaking = false;
-          harker.emit('stopped_speaking');
-        }
-      }
-      harker.speakingHistory.shift();
-      harker.speakingHistory.push(0 + (currentVolume > threshold));
-
-      looper();
-    }, interval);
-  };
-  looper();
+  if (webWorkerUrl) {
+    // Use a webworker as a timer
+    // (more reliable as setTimeout can be throttled in background tabs)
+    let worker = new Worker(webWorkerUrl);
+    // Listen for messages from the worker ()
+    worker.onmessage = processFrame;
+  } else {
+    // Use the setTimeout loop
+    var looper = function() {
+      setTimeout(function() {
+        processFrame();
+        looper();
+      }, interval);
+    };
+    looper();
+  }
 
   return harker;
 }
@@ -504,7 +516,7 @@ WildEmitter.mixin = function (constructor) {
 
 WildEmitter.mixin(WildEmitter);
 
-},{}],4:[function(require,module,exports){
+},{}],3:[function(require,module,exports){
 (function(window) {
   var logger = require('andlog'),
       goldenRatio = 0.618033988749895,
